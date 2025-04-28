@@ -1,5 +1,5 @@
-/* uLisp Cardputer Release 4.7c - www.ulisp.com
-   David Johnson-Davies - www.technoblogy.com - 25th April 2025
+/* uLisp Cardputer Release 4.7d - www.ulisp.com
+   David Johnson-Davies - www.technoblogy.com - 28th April 2025
 
    Licensed under the MIT license: https://opensource.org/licenses/MIT
 */
@@ -4640,7 +4640,7 @@ object *fn_drawchar (object *args, object *env) {
     }
   }
   tft.drawChar(checkinteger(first(args)), checkinteger(second(args)), checkchar(third(args)),
-    colour, bg, size);
+    bg, colour, size); // On Cardputer colour and bg wrong way round
   #else
   (void) args;
   #endif
@@ -5954,10 +5954,16 @@ bool findsubstring (char *part, builtin_t name) {
 }
 
 void testescape () {
-  static uint16_t n;
+  static unsigned long n;
   if (millis()-n < 500) return;
   n = millis();
-  if ((digitalRead(0) == LOW) || (Serial.available() && Serial.read() == '~')) error2("escape!");  
+  if ((digitalRead(0) == LOW) || (Serial.available() && Serial.read() == '~')) error2("escape!");
+  M5Cardputer.update();
+  if (M5Cardputer.Keyboard.isChange()) {
+    if (M5Cardputer.Keyboard.isPressed()) {
+      if (decodeKey() == 27) error2("escape!");
+    }
+  }
 }
 
 bool colonp (symbol_t name) {
@@ -6402,7 +6408,7 @@ void PlotChar (uint8_t ch, uint8_t line, uint8_t column) {
   uint16_t x = column*CharWidth;
   ScrollBuf[column][(line+Scroll) % Lines] = ch;
   if (ch & 0x80) {
-    tft.drawChar(x, y, ch & 0x7f, BLACK, GREEN, 1);
+    tft.drawChar(x, y, ch & 0x7f, GREEN, BLACK, 1); // On Cardputer colour and bg wrong way round
   } else {
     tft.drawChar(x, y, ch & 0x7f, BLACK, WHITE, 1);
   }
@@ -6418,7 +6424,7 @@ void ScrollDisplay () {
       char c2 = ScrollBuf[x][(y+Scroll+1) % Lines];
       if (c != c2) {
         if (c2 & 0x80) {
-          tft.drawChar(x*CharWidth, y*Leading, c2 & 0x7f, BLACK, GREEN, 1);
+          tft.drawChar(x*CharWidth, y*Leading, c2 & 0x7f, GREEN, BLACK, 1); // On Cardputer colour and bg wrong way round
         } else {
           tft.drawChar(x*CharWidth, y*Leading, c2 & 0x7f, BLACK, WHITE, 1);
         }
@@ -6501,13 +6507,64 @@ void Display (char c) {
 
 // Keyboard **********************************************************************************
 
+int LastKeyword = 0; // For autocomplete
+
 char decodeKey () {
-  Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState(); 
-  for (auto i : status.word) return i;
+  Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+  for (auto i : status.word) { if (status.fn && i == '`') return 27; else return i; }
+  if (status.enter && status.shift) return 26; // For echo last line
   if (status.enter) return '\n';
   if (status.del) return 8;
   if (status.tab) return '\t';
   return 0;
+}
+
+/*
+  autoComplete - autocompletes the string in the line editor with the next symbol from the table of built-in symbols. 
+*/
+void autoComplete () {
+  static int bufIndex = 0, matchLen = 0, i = 0;
+  int gap = 0;
+  
+  // Only update what we're matching if we're not already looking through the buffer
+  if (LastKeyword == 0) { 
+    i = 0; // Reset the search
+    for (matchLen = 0; matchLen < 32; matchLen++) {
+      int bufLoc = WritePtr - matchLen;
+      if ((KybdBuf[bufLoc] == ' ') || (KybdBuf[bufLoc] == '(') || (KybdBuf[bufLoc] == '\n')) {
+        // Move past those characters because we're not matching on them
+        bufIndex = bufLoc + 1;
+        matchLen--;
+        break;
+      }
+      // Do this test here in case the first character in the buffer is one of the characters we test for
+      else if (bufLoc == 0) { 
+        bufIndex = bufLoc; 
+        break; 
+      } 
+    }
+  }
+
+  // Erase the previously shown keyword
+  for (int n=0; n<LastKeyword; n++) ProcessKey(8);
+
+  // Scan the table for keywords that start with the match buffer
+  int entries = tablesize(0) + tablesize(1);
+  while (true) {
+    bool n = i<tablesize(0);
+    const char *k = table(n?0:1)[n?i:i-tablesize(0)].string;
+    i = (i + 1) % entries; // Wrap
+    if (*k == KybdBuf[bufIndex]) {
+      if (strncmp(k, &KybdBuf[bufIndex], matchLen) == 0) {
+        // Skip the letters we're matching because they're already there
+        LastKeyword = strlen(k) - matchLen;
+        while (*(k + matchLen)) ProcessKey(*(k++ + matchLen));
+        return;
+      }
+    }
+    gap++; 
+    if (gap == entries) return; // No keywords with this letter
+  }
 }
 
 // Parenthesis highlighting
@@ -6541,7 +6598,7 @@ void ProcessKey (char c) {
       Display(0x7F);
       if (WritePtr) c = KybdBuf[WritePtr-1];
     }
-  } else if (c == '\t') { // tab or ctrl-I
+  } else if (c == 26) { // Shift-Enter
     for (int i = 0; i < LastWritePtr; i++) Display(KybdBuf[i]);
     WritePtr = LastWritePtr;
   } else if (WritePtr < KybdBufSize) {
@@ -6608,7 +6665,8 @@ int gserial () {
       if (M5Cardputer.Keyboard.isChange()) {
         if (M5Cardputer.Keyboard.isPressed()) {
           char key = decodeKey();
-          if (key) ProcessKey(key);
+          if (key == '\t') { autoComplete(); } 
+          else if (key) { LastKeyword = 0; ProcessKey(key); }
         }
       }
     }
@@ -6626,7 +6684,8 @@ int gserial () {
     if (M5Cardputer.Keyboard.isChange()) {
       if (M5Cardputer.Keyboard.isPressed()) {
         char key = decodeKey();
-        if (key) ProcessKey(key);
+        if (key == '\t') { autoComplete(); } 
+        else if (key) { LastKeyword = 0; ProcessKey(key); }
       }
     }
   }
@@ -6832,7 +6891,7 @@ void setup () {
   initsleep();
   initBoard();
   initgfx();
-  pfstring(PSTR("uLisp 4.7c "), pserial); pln(pserial);
+  pfstring(PSTR("uLisp 4.7d "), pserial); pln(pserial);
 }
 
 // Read/Evaluate/Print loop
