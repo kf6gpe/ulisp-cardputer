@@ -7,6 +7,7 @@
 // Lisp Library
 const char LispLibrary[] = "";
 
+
 // Compile options
 
 // #define resetautorun
@@ -15,9 +16,9 @@ const char LispLibrary[] = "";
 // #define printgcs
 #define sdcardsupport
 #define gfxsupport
-// #define lisplibrary
+//#define lisplibrary
 // #define extensions
-// #define largerfont
+#define largerfont
 
 // Includes
 
